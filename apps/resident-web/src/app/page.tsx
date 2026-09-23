@@ -34,7 +34,10 @@ import {
   Layers,
   FileText,
   Activity,
-  ArrowRight
+  ArrowRight,
+  LogOut,
+  Plus,
+  RefreshCw
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import io from 'socket.io-client';
@@ -57,17 +60,45 @@ export default function ResidentApp() {
   const [showRatingModal, setShowRatingModal] = useState<string | null>(null);
   const [showCommunityModal, setShowCommunityModal] = useState(false);
 
-  // User State
-  const [user, setUser] = useState({
-    id: '',
-    name: 'Rahul Sharma',
-    email: 'rahul.sharma@campus.edu',
-    phone: '+91 99887 76655',
-    room: 'A-204',
-    block: 'Nilgiri Block A (Boys)',
-    avatar: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=120',
-    token: ''
-  });
+  // Multi-Tenant Resident User Interface
+  interface ResidentUser {
+    id: string;
+    name: string;
+    email: string;
+    phone: string;
+    room: string;
+    block: string;
+    avatar: string;
+    tenantId: string;
+    tenantName: string;
+    tenantCode: string;
+    token: string;
+  }
+
+  const [user, setUser] = useState<ResidentUser | null>(null);
+  const [colleges, setColleges] = useState<any[]>([]);
+  const [authTab, setAuthTab] = useState<'LOGIN' | 'ENROLL'>('LOGIN');
+
+  // Login form
+  const [loginEmail, setLoginEmail] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [loginError, setLoginError] = useState('');
+
+  // Enroll form
+  const [selectedCollegeId, setSelectedCollegeId] = useState('');
+  const [studentName, setStudentName] = useState('');
+  const [studentRoll, setStudentRoll] = useState('');
+  const [studentRoom, setStudentRoom] = useState('');
+  const [selectedBlock, setSelectedBlock] = useState('');
+  const [studentEmail, setStudentEmail] = useState('');
+  const [studentPassword, setStudentPassword] = useState('');
+  const [studentPhone, setStudentPhone] = useState('');
+  const [parentName, setParentName] = useState('');
+  const [parentPhone, setParentPhone] = useState('');
+  const [course, setCourse] = useState('B.Tech Undergraduate');
+  const [enrollLoading, setEnrollLoading] = useState(false);
+  const [enrollError, setEnrollError] = useState('');
 
   // App Data
   const [complaints, setComplaints] = useState<any[]>([]);
@@ -105,32 +136,38 @@ export default function ResidentApp() {
   const [ratingText, setRatingText] = useState('');
   const [suggestionText, setSuggestionText] = useState('');
 
-  // 1. Initial Login & Data Fetch
+  // 1. Initial Login & Multi-Tenant Enrollment Check
   useEffect(() => {
     async function init() {
+      // 1. Fetch live registered colleges
       try {
-        // Auto-login as default demo resident (Rahul Sharma)
-        const loginRes = await fetch(`${API_BASE}/auth/login`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: 'rahul.sharma@campus.edu' })
-        });
-        const loginData = await loginRes.json();
-        if (loginData.token) {
-          setUser({
-            id: loginData.user.id,
-            name: loginData.user.name,
-            email: loginData.user.email,
-            phone: loginData.user.phone,
-            room: loginData.user.residentProfile?.roomNumber || 'A-204',
-            block: loginData.user.residentProfile?.blockName || 'Nilgiri Block A',
-            avatar: loginData.user.avatarUrl || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=120',
-            token: loginData.token
-          });
-          fetchData(loginData.token, loginData.user.id);
+        const colRes = await fetch(`${API_BASE}/auth/colleges`);
+        if (colRes.ok) {
+          const cols = await colRes.json();
+          setColleges(cols);
+          if (cols.length > 0) {
+            setSelectedCollegeId(cols[0].id);
+            if (cols[0].blocks && cols[0].blocks.length > 0) {
+              setSelectedBlock(cols[0].blocks[0]);
+            }
+          }
         }
-      } catch (err) {
-        console.error('Initial login error:', err);
+      } catch (e) {
+        console.error('Failed to fetch colleges:', e);
+      }
+
+      // 2. Check localStorage for active student session
+      try {
+        const savedUserStr = localStorage.getItem('shms_resident_user');
+        if (savedUserStr) {
+          const parsed = JSON.parse(savedUserStr);
+          if (parsed && parsed.token) {
+            setUser(parsed);
+            fetchData(parsed.token, parsed.id);
+          }
+        }
+      } catch (e) {
+        console.error('Resident session restore error:', e);
       }
     }
     init();
@@ -141,10 +178,10 @@ export default function ResidentApp() {
       console.log('Real-time SOS Siren received:', data);
     });
     socket.on('pass:update', () => {
-      if (user.token) fetchData(user.token, user.id);
+      if (user?.token && user?.id) fetchData(user.token, user.id);
     });
     socket.on('complaint:update', () => {
-      if (user.token) fetchData(user.token, user.id);
+      if (user?.token && user?.id) fetchData(user.token, user.id);
     });
 
     return () => {
@@ -177,6 +214,112 @@ export default function ResidentApp() {
     } catch (err) {
       console.error('Fetch data error:', err);
     }
+  }
+
+  // Student Login Handler
+  async function handleLogin(email: string) {
+    setLoginLoading(true);
+    setLoginError('');
+    try {
+      const res = await fetch(`${API_BASE}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password: loginPassword })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setLoginError(data.error || 'Authentication failed');
+        setLoginLoading(false);
+        return;
+      }
+      const residentObj: ResidentUser = {
+        id: data.user.id,
+        name: data.user.name,
+        email: data.user.email,
+        phone: data.user.phone || '+91 99000 00000',
+        room: data.user.residentProfile?.roomNumber || '101',
+        block: data.user.residentProfile?.blockName || 'Block A',
+        avatar: data.user.avatarUrl || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=120',
+        tenantId: data.user.tenantId,
+        tenantName: data.user.tenantName || 'Campus Residence',
+        tenantCode: data.user.tenantCode || 'CAMPUS',
+        token: data.token
+      };
+      setUser(residentObj);
+      localStorage.setItem('shms_resident_user', JSON.stringify(residentObj));
+      fetchData(data.token, data.user.id);
+    } catch (err) {
+      setLoginError('Server connection error');
+    } finally {
+      setLoginLoading(false);
+    }
+  }
+
+  // Student Enrollment Handler
+  async function handleEnrollStudent(e: React.FormEvent) {
+    e.preventDefault();
+    if (!studentName || !studentEmail || !selectedCollegeId) {
+      setEnrollError('College selection, Student Name, and Email are required');
+      return;
+    }
+    setEnrollLoading(true);
+    setEnrollError('');
+    try {
+      const res = await fetch(`${API_BASE}/auth/register-student`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          collegeId: selectedCollegeId,
+          name: studentName,
+          email: studentEmail,
+          password: studentPassword || 'student123',
+          phone: studentPhone || '+91 99000 00000',
+          studentId: studentRoll || `STU-${Date.now().toString().slice(-4)}`,
+          roomNumber: studentRoom || '101',
+          blockName: selectedBlock || 'Block A',
+          course: course || 'B.Tech',
+          parentName: parentName || 'Parent / Guardian',
+          parentPhone: parentPhone || '+91 98000 11111'
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setEnrollError(data.error || 'Enrollment failed');
+        setEnrollLoading(false);
+        return;
+      }
+      const residentObj: ResidentUser = {
+        id: data.user.id,
+        name: data.user.name,
+        email: data.user.email,
+        phone: data.user.phone || '+91 99000 00000',
+        room: data.user.residentProfile?.roomNumber || '101',
+        block: data.user.residentProfile?.blockName || 'Block A',
+        avatar: data.user.avatarUrl || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=120',
+        tenantId: data.user.tenantId,
+        tenantName: data.user.tenantName || 'Campus Residence',
+        tenantCode: data.user.tenantCode || 'CAMPUS',
+        token: data.token
+      };
+      setUser(residentObj);
+      localStorage.setItem('shms_resident_user', JSON.stringify(residentObj));
+      fetchData(data.token, data.user.id);
+    } catch (err) {
+      setEnrollError('Failed to connect to enrollment server');
+    } finally {
+      setEnrollLoading(false);
+    }
+  }
+
+  // Logout / Switch Account Handler
+  function handleLogout() {
+    localStorage.removeItem('shms_resident_user');
+    setUser(null);
+    setComplaints([]);
+    setPasses([]);
+    setBills([]);
+    setVisitors([]);
+    setVehicles([]);
   }
 
   // SOS Trigger Action
@@ -405,6 +548,373 @@ export default function ResidentApp() {
   // Active Pass
   const activePass = passes.find((p) => p.status === 'APPROVED' || p.status === 'ACTIVE');
 
+  const selectedCollege = colleges.find((c) => c.id === selectedCollegeId);
+  const availableBlocks = selectedCollege?.blocks || [];
+
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col font-sans selection:bg-blue-600 selection:text-white">
+        {/* Top Header */}
+        <header className="h-16 border-b border-slate-800/80 px-4 md:px-8 flex items-center justify-between bg-slate-950/80 backdrop-blur-md sticky top-0 z-50">
+          <div className="flex items-center space-x-3">
+            <div className="w-9 h-9 bg-gradient-to-tr from-blue-600 to-indigo-500 rounded-xl flex items-center justify-center font-black text-white shadow-lg shadow-blue-500/25">
+              SH
+            </div>
+            <div>
+              <div className="flex items-center space-x-2">
+                <span className="font-bold text-sm tracking-tight text-white">SmartHostel Resident</span>
+                <span className="text-[9px] bg-blue-500/20 text-blue-400 font-bold px-2 py-0.5 rounded-full border border-blue-500/30">
+                  Student Portal
+                </span>
+              </div>
+              <p className="text-[10px] text-slate-400">Digital Passes • Grievances • Mess • 24/7 SOS</p>
+            </div>
+          </div>
+
+          <a
+            href="http://localhost:3000"
+            target="_blank"
+            rel="noreferrer"
+            className="text-xs font-semibold text-slate-300 hover:text-white px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-800/60 hover:bg-slate-800 flex items-center space-x-1.5 transition"
+          >
+            <span>Campus Admin</span>
+            <ArrowRight className="w-3.5 h-3.5 text-blue-400" />
+          </a>
+        </header>
+
+        {/* Portal Body */}
+        <div className="flex-1 flex flex-col items-center justify-center p-4 md:p-8 relative overflow-hidden">
+          <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-[600px] h-[300px] bg-indigo-600/10 blur-[120px] rounded-full pointer-events-none" />
+
+          <div className="max-w-xl w-full z-10 space-y-6">
+            <div className="text-center space-y-2">
+              <div className="inline-flex items-center space-x-2 px-3 py-1 rounded-full bg-blue-500/10 border border-blue-500/20 text-blue-400 text-xs font-semibold">
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Open for All Hostels & Colleges • Instant Digital Access</span>
+              </div>
+              <h1 className="text-2xl md:text-4xl font-black text-white tracking-tight">
+                Resident Student Portal
+              </h1>
+              <p className="text-slate-400 text-xs md:text-sm max-w-md mx-auto">
+                Sign in with your student credentials or join your campus hostel to access instant turnstile passes, meal updates, and rapid grievance redressal.
+              </p>
+            </div>
+
+            {/* Auth Box */}
+            <div className="bg-slate-950/90 border border-slate-800 rounded-3xl p-5 md:p-7 shadow-2xl backdrop-blur-xl">
+              {/* Tab Switcher */}
+              <div className="flex bg-slate-900 p-1.5 rounded-2xl border border-slate-800 mb-6">
+                <button
+                  type="button"
+                  onClick={() => { setAuthTab('LOGIN'); setLoginError(''); setEnrollError(''); }}
+                  className={`flex-1 py-2.5 rounded-xl font-bold text-xs transition flex items-center justify-center space-x-2 cursor-pointer ${
+                    authTab === 'LOGIN'
+                      ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <UserCheck className="w-4 h-4" />
+                  <span>Student Sign In</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setAuthTab('ENROLL'); setLoginError(''); setEnrollError(''); }}
+                  className={`flex-1 py-2.5 rounded-xl font-bold text-xs transition flex items-center justify-center space-x-2 cursor-pointer ${
+                    authTab === 'ENROLL'
+                      ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Join Your College Hostel</span>
+                </button>
+              </div>
+
+              {/* TAB 1: LOGIN */}
+              {authTab === 'LOGIN' && (
+                <div className="space-y-5">
+                  {loginError && (
+                    <div className="p-3 bg-red-500/10 border border-red-500/30 text-red-400 text-xs rounded-xl flex items-center space-x-2">
+                      <AlertTriangle className="w-4 h-4 shrink-0" />
+                      <span>{loginError}</span>
+                    </div>
+                  )}
+
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      if (!loginEmail) {
+                        setLoginError('Please enter your email');
+                        return;
+                      }
+                      handleLogin(loginEmail);
+                    }}
+                    className="space-y-4"
+                  >
+                    <div>
+                      <label className="block text-xs font-bold text-slate-300 mb-1">
+                        Registered Student Email
+                      </label>
+                      <input
+                        type="email"
+                        required
+                        placeholder="e.g. rahul.sharma@campus.edu"
+                        value={loginEmail}
+                        onChange={(e) => setLoginEmail(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-300 mb-1">
+                        Password
+                      </label>
+                      <input
+                        type="password"
+                        placeholder="••••••••"
+                        value={loginPassword}
+                        onChange={(e) => setLoginPassword(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+                      />
+                    </div>
+
+                    <button
+                      type="submit"
+                      disabled={loginLoading}
+                      className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl shadow-lg shadow-blue-600/30 transition flex items-center justify-center space-x-2 text-xs disabled:opacity-50 cursor-pointer"
+                    >
+                      {loginLoading ? (
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <>
+                          <span>Enter Resident App</span>
+                          <ChevronRight className="w-4 h-4" />
+                        </>
+                      )}
+                    </button>
+                  </form>
+
+                  {/* 1-Click Demo Resident Logins */}
+                  <div className="pt-5 border-t border-slate-800">
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2.5 text-center">
+                      Quick 1-Click Demo Residents
+                    </p>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleLogin('rahul.sharma@campus.edu')}
+                        className="p-2.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-blue-500/50 rounded-xl text-left transition cursor-pointer"
+                      >
+                        <span className="text-[9px] font-bold text-blue-400 bg-blue-500/10 px-1.5 py-0.5 rounded">
+                          Room A-204
+                        </span>
+                        <p className="text-xs font-bold text-white mt-1">Rahul Sharma</p>
+                        <p className="text-[10px] text-slate-400 truncate">Apex Institute</p>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleLogin('priya.patel@campus.edu')}
+                        className="p-2.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-purple-500/50 rounded-xl text-left transition cursor-pointer"
+                      >
+                        <span className="text-[9px] font-bold text-purple-400 bg-purple-500/10 px-1.5 py-0.5 rounded">
+                          Room G-102
+                        </span>
+                        <p className="text-xs font-bold text-white mt-1">Priya Patel</p>
+                        <p className="text-[10px] text-slate-400 truncate">Apex Institute</p>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 2: ENROLL */}
+              {authTab === 'ENROLL' && (
+                <form onSubmit={handleEnrollStudent} className="space-y-4 text-xs">
+                  {enrollError && (
+                    <div className="p-3 bg-red-500/10 border border-red-500/30 text-red-400 text-xs rounded-xl flex items-center space-x-2">
+                      <AlertTriangle className="w-4 h-4 shrink-0" />
+                      <span>{enrollError}</span>
+                    </div>
+                  )}
+
+                  {/* College Selector */}
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                      Select Your College / University *
+                    </label>
+                    <select
+                      value={selectedCollegeId}
+                      onChange={(e) => {
+                        const cId = e.target.value;
+                        setSelectedCollegeId(cId);
+                        const chosen = colleges.find((c) => c.id === cId);
+                        if (chosen && chosen.blocks && chosen.blocks.length > 0) {
+                          setSelectedBlock(chosen.blocks[0]);
+                        }
+                      }}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-blue-500"
+                    >
+                      {colleges.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name} ({c.code}) - {c.address}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                        Full Name *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="e.g. Aarav Gupta"
+                        value={studentName}
+                        onChange={(e) => setStudentName(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                        Student ID / Roll No
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. 2026-CS-042"
+                        value={studentRoll}
+                        onChange={(e) => setStudentRoll(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                        Hostel Block
+                      </label>
+                      {availableBlocks.length > 0 ? (
+                        <select
+                          value={selectedBlock}
+                          onChange={(e) => setSelectedBlock(e.target.value)}
+                          className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500"
+                        >
+                          {availableBlocks.map((b: string) => (
+                            <option key={b} value={b}>
+                              {b}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input
+                          type="text"
+                          placeholder="e.g. Block A"
+                          value={selectedBlock}
+                          onChange={(e) => setSelectedBlock(e.target.value)}
+                          className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+                        />
+                      )}
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                        Room Number *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="e.g. 204 or B-102"
+                        value={studentRoom}
+                        onChange={(e) => setStudentRoom(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                        Student Email *
+                      </label>
+                      <input
+                        type="email"
+                        required
+                        placeholder="e.g. student@college.edu"
+                        value={studentEmail}
+                        onChange={(e) => setStudentEmail(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                        Password
+                      </label>
+                      <input
+                        type="password"
+                        placeholder="••••••••"
+                        value={studentPassword}
+                        onChange={(e) => setStudentPassword(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                        Student Phone
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="+91 99000 00000"
+                        value={studentPhone}
+                        onChange={(e) => setStudentPhone(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                        Parent Emergency Phone
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="+91 98000 11111"
+                        value={parentPhone}
+                        onChange={(e) => setParentPhone(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+                      />
+                    </div>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={enrollLoading}
+                    className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold py-3 rounded-xl shadow-lg shadow-blue-600/30 transition flex items-center justify-center space-x-2 text-xs disabled:opacity-50 mt-2 cursor-pointer"
+                  >
+                    {enrollLoading ? (
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <>
+                        <Sparkles className="w-4 h-4" />
+                        <span>Complete Enrollment & Enter Hostel</span>
+                      </>
+                    )}
+                  </button>
+                </form>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex-1 flex flex-col min-h-screen relative pb-16">
       {/* 1. Header / Profile Bar */}
@@ -424,19 +934,30 @@ export default function ResidentApp() {
                 </span>
               </div>
               <p className="text-xs text-blue-100 flex items-center space-x-1 mt-0.5">
-                <Building className="w-3.5 h-3.5 inline mr-1" />
+                <Building className="w-3.5 h-3.5 inline mr-1 text-blue-200" />
+                <span className="font-semibold">{user.tenantName}</span>
+                <span>•</span>
                 <span>Room {user.room}</span>
                 <span>•</span>
                 <span>{user.block}</span>
               </p>
             </div>
           </div>
-          <button
-            onClick={() => setActiveTab('PROFILE')}
-            className="w-9 h-9 bg-white/10 hover:bg-white/20 rounded-full flex items-center justify-center text-white backdrop-blur-sm transition"
-          >
-            <Bell className="w-4 h-4" />
-          </button>
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={() => setActiveTab('PROFILE')}
+              className="w-9 h-9 bg-white/10 hover:bg-white/20 rounded-full flex items-center justify-center text-white backdrop-blur-sm transition"
+            >
+              <Bell className="w-4 h-4" />
+            </button>
+            <button
+              onClick={handleLogout}
+              title="Sign Out / Switch Student"
+              className="w-9 h-9 bg-white/10 hover:bg-red-500/30 rounded-full flex items-center justify-center text-white backdrop-blur-sm transition cursor-pointer"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
         {/* Scrolling Urgent Notice Ticker */}
@@ -988,26 +1509,44 @@ export default function ResidentApp() {
           <div className="space-y-4">
             <h2 className="text-base font-bold text-slate-900">Profile & Dues</h2>
 
+            {/* Connected Institution & Sign Out */}
+            <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Connected Campus Institution</span>
+                  <p className="text-sm font-bold text-slate-800">{user.tenantName}</p>
+                  <p className="text-xs text-blue-600 font-mono">College Code: {user.tenantCode}</p>
+                </div>
+                <button
+                  onClick={handleLogout}
+                  className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 text-xs font-bold rounded-xl border border-red-200 flex items-center space-x-1.5 transition cursor-pointer"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span>Sign Out</span>
+                </button>
+              </div>
+            </div>
+
             {/* KYC Card */}
             <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-2.5">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-slate-800">KYC & Parent Verification</span>
+                <span className="text-xs font-bold text-slate-800">KYC & Hostel Verification</span>
                 <span className="text-[10px] font-bold bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">
                   100% Digitized
                 </span>
               </div>
               <div className="grid grid-cols-2 gap-2 text-xs text-slate-600">
                 <div>
-                  <span className="text-[10px] text-slate-400 block">Blood Group</span>
-                  <span className="font-semibold text-slate-800">B+</span>
+                  <span className="text-[10px] text-slate-400 block">Student Name</span>
+                  <span className="font-semibold text-slate-800">{user.name}</span>
                 </div>
                 <div>
-                  <span className="text-[10px] text-slate-400 block">Parent Phone</span>
-                  <span className="font-semibold text-slate-800">+91 94140 12345</span>
+                  <span className="text-[10px] text-slate-400 block">Student Email</span>
+                  <span className="font-semibold text-slate-800">{user.email}</span>
                 </div>
                 <div>
-                  <span className="text-[10px] text-slate-400 block">ID Proof</span>
-                  <span className="font-semibold text-slate-800">AADHAAR-8902</span>
+                  <span className="text-[10px] text-slate-400 block">Hostel Block</span>
+                  <span className="font-semibold text-slate-800">{user.block}</span>
                 </div>
                 <div>
                   <span className="text-[10px] text-slate-400 block">Hostel Room</span>

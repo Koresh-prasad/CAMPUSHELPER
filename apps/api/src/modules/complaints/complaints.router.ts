@@ -12,6 +12,10 @@ router.get('/', optionalAuthMiddleware, async (req: Request, res: Response) => {
     const { status, category, residentId } = req.query;
 
     const whereClause: any = {};
+    const tenantFilter = req.user?.tenantId || (req.query.tenantId as string);
+    if (tenantFilter) {
+      whereClause.resident = { tenantId: tenantFilter };
+    }
     if (status) whereClause.status = String(status);
     if (category) whereClause.category = String(category);
     if (residentId) whereClause.residentId = String(residentId);

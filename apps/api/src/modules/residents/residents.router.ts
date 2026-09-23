@@ -9,6 +9,10 @@ router.get('/', optionalAuthMiddleware, async (req: Request, res: Response) => {
     const { block, search } = req.query;
 
     const whereClause: any = {};
+    const tenantFilter = req.user?.tenantId || (req.query.tenantId as string);
+    if (tenantFilter) {
+      whereClause.tenantId = tenantFilter;
+    }
     if (block) {
       whereClause.residentProfile = { blockName: String(block) };
     }

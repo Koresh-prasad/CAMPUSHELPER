@@ -17,7 +17,7 @@ let cachedEngineStatus: AlertEngineStatus = {
   unresolvedEmergencies: 0
 };
 
-export async function checkCurfewViolations(curfewTimeStr: string = '21:30'): Promise<CurfewViolation[]> {
+export async function checkCurfewViolations(curfewTimeStr: string = '21:30', tenantId?: string): Promise<CurfewViolation[]> {
   const now = new Date();
   const [curfewHour, curfewMin] = curfewTimeStr.split(':').map(Number);
   
@@ -27,6 +27,7 @@ export async function checkCurfewViolations(curfewTimeStr: string = '21:30'): Pr
 
   // We find all residents who are NOT inside the hostel or who have overdue passes
   const activeResidents = await prisma.residentProfile.findMany({
+    where: tenantId ? { user: { tenantId } } : undefined,
     include: {
       user: true
     }

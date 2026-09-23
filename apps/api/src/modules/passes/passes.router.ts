@@ -12,6 +12,10 @@ router.get('/', optionalAuthMiddleware, async (req: Request, res: Response) => {
     const { status, passType, residentId } = req.query;
 
     const whereClause: any = {};
+    const tenantFilter = req.user?.tenantId || (req.query.tenantId as string);
+    if (tenantFilter) {
+      whereClause.resident = { tenantId: tenantFilter };
+    }
     if (status) whereClause.status = String(status);
     if (passType) whereClause.passType = String(passType);
     if (residentId) whereClause.residentId = String(residentId);
@@ -64,17 +68,23 @@ router.get('/', optionalAuthMiddleware, async (req: Request, res: Response) => {
 });
 
 // Live "Who's Out" board - critical alerting feature
-router.get('/live-whos-out', async (_req: Request, res: Response) => {
+router.get('/live-whos-out', optionalAuthMiddleware, async (req: Request, res: Response) => {
   try {
-    const violations = await checkCurfewViolations('21:30');
+    const tenantFilter = req.user?.tenantId || (req.query.tenantId as string);
+    const violations = await checkCurfewViolations('21:30', tenantFilter);
+
+    const outResidentsWhere: any = {
+      currentPresence: {
+        in: ['OUT_ON_PASS', 'OUT_ON_LEAVE', 'OVERDUE']
+      }
+    };
+    if (tenantFilter) {
+      outResidentsWhere.user = { tenantId: tenantFilter };
+    }
 
     // Also get all residents currently out (whether on approved leave, gate pass, or overdue)
     const outResidents = await prisma.residentProfile.findMany({
-      where: {
-        currentPresence: {
-          in: ['OUT_ON_PASS', 'OUT_ON_LEAVE', 'OVERDUE']
-        }
-      },
+      where: outResidentsWhere,
       include: {
         user: {
           include: {

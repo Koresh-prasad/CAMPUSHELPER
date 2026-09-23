@@ -1,11 +1,16 @@
 import { Router, Request, Response } from 'express';
 import { prisma } from '../../prisma';
 import { getRulesEngineStatus } from '../rules-engine/alertRulesEngine';
+import { optionalAuthMiddleware } from '../../middlewares/auth';
 
 const router = Router();
 
-router.get('/dashboard', async (_req: Request, res: Response) => {
+router.get('/dashboard', optionalAuthMiddleware, async (req: Request, res: Response) => {
   try {
+    const tenantFilter = req.user?.tenantId || (req.query.tenantId as string);
+    const residentWhere = tenantFilter ? { resident: { tenantId: tenantFilter } } : undefined;
+    const profileWhere = tenantFilter ? { user: { tenantId: tenantFilter } } : undefined;
+
     const [
       totalResidents,
       totalRooms,
@@ -18,15 +23,20 @@ router.get('/dashboard', async (_req: Request, res: Response) => {
       emergencies,
       auditCount
     ] = await Promise.all([
-      prisma.residentProfile.count(),
+      prisma.residentProfile.count({ where: profileWhere }),
       prisma.room.count(),
       prisma.bed.count(),
       prisma.bed.count({ where: { isOccupied: true } }),
-      prisma.complaint.findMany(),
-      prisma.pass.findMany(),
-      prisma.visitor.findMany(),
-      prisma.bill.findMany(),
-      prisma.emergencyAlert.findMany({ where: { status: { in: ['ACTIVE', 'INVESTIGATING'] } } }),
+      prisma.complaint.findMany({ where: residentWhere }),
+      prisma.pass.findMany({ where: residentWhere }),
+      prisma.visitor.findMany({ where: residentWhere }),
+      prisma.bill.findMany({ where: residentWhere }),
+      prisma.emergencyAlert.findMany({
+        where: {
+          status: { in: ['ACTIVE', 'INVESTIGATING'] },
+          ...(tenantFilter ? { resident: { tenantId: tenantFilter } } : {})
+        }
+      }),
       prisma.auditLog.count()
     ]);
 
@@ -54,7 +64,10 @@ router.get('/dashboard', async (_req: Request, res: Response) => {
     // Presence & Curfew
     const engineStatus = getRulesEngineStatus();
     const residentsOut = await prisma.residentProfile.count({
-      where: { currentPresence: { in: ['OUT_ON_PASS', 'OUT_ON_LEAVE', 'OVERDUE'] } }
+      where: {
+        currentPresence: { in: ['OUT_ON_PASS', 'OUT_ON_LEAVE', 'OVERDUE'] },
+        ...(tenantFilter ? { user: { tenantId: tenantFilter } } : {})
+      }
     });
 
     // Active visitors

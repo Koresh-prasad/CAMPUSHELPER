@@ -34,7 +34,8 @@ import {
   Volume2,
   VolumeX,
   RefreshCw,
-  Plus
+  Plus,
+  LogOut
 } from 'lucide-react';
 import {
   BarChart,
@@ -96,7 +97,47 @@ export default function AdminPanel() {
   const [residentSearch, setResidentSearch] = useState('');
   const [selectedBlockFilter, setSelectedBlockFilter] = useState('ALL');
   const [audioAlertMuted, setAudioAlertMuted] = useState(false);
+  interface AdminUser {
+    id: string;
+    name: string;
+    email: string;
+    phone?: string;
+    role: string;
+    avatarUrl?: string;
+    tenantId: string;
+    tenantName: string;
+    tenantCode: string;
+    staffProfile?: any;
+    hostel?: any;
+  }
+
+  const [currentUser, setCurrentUser] = useState<AdminUser | null>(null);
   const [authToken, setAuthToken] = useState<string>('');
+  const [registeredColleges, setRegisteredColleges] = useState<any[]>([]);
+
+  // Public Campus Manager Auth State
+  const [authTab, setAuthTab] = useState<'LOGIN' | 'REGISTER'>('LOGIN');
+
+  // Login form
+  const [loginEmail, setLoginEmail] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [loginError, setLoginError] = useState('');
+
+  // Register form
+  const [regCollegeName, setRegCollegeName] = useState('');
+  const [regCollegeCode, setRegCollegeCode] = useState('');
+  const [regAddress, setRegAddress] = useState('');
+  const [regHostelType, setRegHostelType] = useState('CO_ED');
+  const [regBlocks, setRegBlocks] = useState('Block A (North), Block B (South)');
+  const [regCurfewTime, setRegCurfewTime] = useState('21:30');
+  const [regManagerName, setRegManagerName] = useState('');
+  const [regEmail, setRegEmail] = useState('');
+  const [regPassword, setRegPassword] = useState('');
+  const [regPhone, setRegPhone] = useState('');
+  const [regRole, setRegRole] = useState<'WARDEN' | 'DIRECTOR'>('WARDEN');
+  const [regLoading, setRegLoading] = useState(false);
+  const [regError, setRegError] = useState('');
 
   // Onboarding Wizard State (5 Steps)
   const [onboardingStep, setOnboardingStep] = useState(1);
@@ -104,27 +145,40 @@ export default function AdminPanel() {
   const [onboardingBlocks, setOnboardingBlocks] = useState('Nilgiri Block A, Shivalik Block B');
   const [onboardingCurfew, setOnboardingCurfew] = useState('21:30');
 
-  // 1. Initial Load & Demo Authentication
+  // 1. Initial Load & Multi-Tenant Authentication Check
   useEffect(() => {
     async function init() {
+      // 1. Fetch live colleges list for directory
       try {
-        const loginRes = await fetch(`${API_BASE}/auth/login`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: 'warden.boys@campus.edu' })
-        });
-        const loginData = await loginRes.json();
-        if (loginData.token) {
-          setAuthToken(loginData.token);
-          fetchAllAdminData(loginData.token);
+        const colRes = await fetch(`${API_BASE}/auth/colleges`);
+        if (colRes.ok) {
+          const cols = await colRes.json();
+          setRegisteredColleges(cols);
+        }
+      } catch (e) {
+        console.error('Error fetching colleges:', e);
+      }
+
+      // 2. Check cached credentials in localStorage
+      try {
+        const cachedUserStr = localStorage.getItem('shms_admin_user');
+        const cachedToken = localStorage.getItem('shms_admin_token');
+        if (cachedUserStr && cachedToken) {
+          const parsedUser = JSON.parse(cachedUserStr);
+          setCurrentUser(parsedUser);
+          setAuthToken(cachedToken);
+          if (parsedUser.role) {
+            setActiveRole(parsedUser.role as any);
+          }
+          fetchAllAdminData(cachedToken, parsedUser.tenantId);
         }
       } catch (err) {
-        console.error('Admin login error:', err);
+        console.error('Admin session restore error:', err);
       }
     }
     init();
 
-    // 2. Setup WebSockets for instant Siren & Presence alerts
+    // 3. Setup WebSockets for instant Siren & Presence alerts
     const socket = io(SOCKET_URL);
     socket.on('connect', () => {
       console.log('Admin socket connected');
@@ -144,11 +198,11 @@ export default function AdminPanel() {
     });
 
     socket.on('complaint:update', () => {
-      if (authToken) fetchAllAdminData(authToken);
+      if (authToken) fetchAllAdminData(authToken, currentUser?.tenantId);
     });
 
     socket.on('pass:update', () => {
-      if (authToken) fetchAllAdminData(authToken);
+      if (authToken) fetchAllAdminData(authToken, currentUser?.tenantId);
     });
 
     return () => {
@@ -156,23 +210,25 @@ export default function AdminPanel() {
     };
   }, []);
 
-  async function fetchAllAdminData(token: string) {
+  async function fetchAllAdminData(token: string, tenantId?: string) {
+    const tId = tenantId || currentUser?.tenantId;
+    const tenantQuery = tId ? `?tenantId=${tId}` : '';
     const headers = { Authorization: `Bearer ${token}` };
     try {
       const [dashRes, emRes, resRes, cmpRes, passRes, whoRes, visRes, vehRes, billRes, notRes, repRes, audRes] =
         await Promise.all([
-          fetch(`${API_BASE}/analytics/dashboard`, { headers }),
-          fetch(`${API_BASE}/emergency/active`, { headers }),
-          fetch(`${API_BASE}/residents`, { headers }),
-          fetch(`${API_BASE}/complaints`, { headers }),
-          fetch(`${API_BASE}/passes`, { headers }),
-          fetch(`${API_BASE}/passes/live-whos-out`, { headers }),
-          fetch(`${API_BASE}/visitors`, { headers }),
-          fetch(`${API_BASE}/vehicles`, { headers }),
-          fetch(`${API_BASE}/billing`, { headers }),
-          fetch(`${API_BASE}/notices`),
-          fetch(`${API_BASE}/compliance/naac-report`),
-          fetch(`${API_BASE}/compliance/audit-logs`)
+          fetch(`${API_BASE}/analytics/dashboard${tenantQuery}`, { headers }),
+          fetch(`${API_BASE}/emergency/active${tenantQuery}`, { headers }),
+          fetch(`${API_BASE}/residents${tenantQuery}`, { headers }),
+          fetch(`${API_BASE}/complaints${tenantQuery}`, { headers }),
+          fetch(`${API_BASE}/passes${tenantQuery}`, { headers }),
+          fetch(`${API_BASE}/passes/live-whos-out${tenantQuery}`, { headers }),
+          fetch(`${API_BASE}/visitors${tenantQuery}`, { headers }),
+          fetch(`${API_BASE}/vehicles${tenantQuery}`, { headers }),
+          fetch(`${API_BASE}/billing${tenantQuery}`, { headers }),
+          fetch(`${API_BASE}/notices${tenantQuery}`),
+          fetch(`${API_BASE}/compliance/naac-report${tenantQuery}`),
+          fetch(`${API_BASE}/compliance/audit-logs${tenantQuery}`)
         ]);
 
       if (dashRes.ok) setDashboardData(await dashRes.json());
@@ -192,6 +248,101 @@ export default function AdminPanel() {
     }
   }
 
+  // Manager Login Action
+  async function handleLogin(email: string) {
+    setLoginLoading(true);
+    setLoginError('');
+    try {
+      const res = await fetch(`${API_BASE}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password: loginPassword })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setLoginError(data.error || 'Authentication failed');
+        setLoginLoading(false);
+        return;
+      }
+      setAuthToken(data.token);
+      setCurrentUser(data.user);
+      if (data.user.role) {
+        setActiveRole(data.user.role as any);
+      }
+      localStorage.setItem('shms_admin_user', JSON.stringify(data.user));
+      localStorage.setItem('shms_admin_token', data.token);
+      fetchAllAdminData(data.token, data.user.tenantId);
+    } catch (err) {
+      setLoginError('Failed to connect to authentication server');
+    } finally {
+      setLoginLoading(false);
+    }
+  }
+
+  // Register New College / Institution Action
+  async function handleRegisterCollege(e: React.FormEvent) {
+    e.preventDefault();
+    if (!regCollegeName || !regManagerName || !regEmail) {
+      setRegError('Please provide College Name, Manager Name, and Official Email');
+      return;
+    }
+    setRegLoading(true);
+    setRegError('');
+    try {
+      const res = await fetch(`${API_BASE}/auth/register-college`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          collegeName: regCollegeName,
+          collegeCode: regCollegeCode,
+          hostelType: regHostelType,
+          address: regAddress,
+          blocks: regBlocks,
+          curfewTime: regCurfewTime,
+          managerName: regManagerName,
+          email: regEmail,
+          password: regPassword,
+          phone: regPhone,
+          role: regRole
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setRegError(data.error || 'Registration failed');
+        setRegLoading(false);
+        return;
+      }
+      setAuthToken(data.token);
+      setCurrentUser(data.user);
+      if (data.user.role) {
+        setActiveRole(data.user.role as any);
+      }
+      localStorage.setItem('shms_admin_user', JSON.stringify(data.user));
+      localStorage.setItem('shms_admin_token', data.token);
+      fetchAllAdminData(data.token, data.user.tenantId);
+      // Refresh directory of colleges
+      const colRes = await fetch(`${API_BASE}/auth/colleges`);
+      if (colRes.ok) setRegisteredColleges(await colRes.json());
+    } catch (err) {
+      setRegError('Failed to register college. Server error.');
+    } finally {
+      setRegLoading(false);
+    }
+  }
+
+  // Logout / Switch College Action
+  function handleLogout() {
+    localStorage.removeItem('shms_admin_user');
+    localStorage.removeItem('shms_admin_token');
+    setCurrentUser(null);
+    setAuthToken('');
+    setDashboardData(null);
+    setResidents([]);
+    setComplaints([]);
+    setPasses([]);
+    setWhosOutData(null);
+  }
+
   // Resolve Emergency
   async function resolveEmergency(id: string) {
     if (!authToken) return;
@@ -205,7 +356,7 @@ export default function AdminPanel() {
         body: JSON.stringify({ notes: 'Resolved by Warden on duty' })
       });
       setActiveEmergencies((prev) => prev.filter((a) => a.id !== id));
-      fetchAllAdminData(authToken);
+      fetchAllAdminData(authToken, currentUser?.tenantId);
     } catch (err) {
       console.error('Resolve error:', err);
     }
@@ -223,7 +374,7 @@ export default function AdminPanel() {
         },
         body: JSON.stringify({ status: newStatus })
       });
-      fetchAllAdminData(authToken);
+      fetchAllAdminData(authToken, currentUser?.tenantId);
     } catch (err) {
       console.error('Status update error:', err);
     }
@@ -237,7 +388,7 @@ export default function AdminPanel() {
         method: 'POST',
         headers: { Authorization: `Bearer ${authToken}` }
       });
-      fetchAllAdminData(authToken);
+      fetchAllAdminData(authToken, currentUser?.tenantId);
     } catch (err) {
       console.error('Approve pass error:', err);
     }
@@ -255,7 +406,7 @@ export default function AdminPanel() {
         },
         body: JSON.stringify({ reason: 'Curfew restriction or parental verification pending' })
       });
-      fetchAllAdminData(authToken);
+      fetchAllAdminData(authToken, currentUser?.tenantId);
     } catch (err) {
       console.error('Reject pass error:', err);
     }
@@ -275,7 +426,7 @@ export default function AdminPanel() {
       });
       const data = await res.json();
       setScanResult(data);
-      if (authToken) fetchAllAdminData(authToken);
+      if (authToken) fetchAllAdminData(authToken, currentUser?.tenantId);
     } catch (err) {
       setScanResult({ status: 'ACCESS_DENIED', reason: 'Hardware Scanner Timeout' });
     }
@@ -316,6 +467,439 @@ export default function AdminPanel() {
     { name: 'Security', count: complaints.filter((c) => c.category === 'SECURITY').length }
   ];
 
+  if (!currentUser) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-blue-600 selection:text-white">
+        {/* Top Navbar */}
+        <header className="h-16 border-b border-slate-800/80 px-6 flex items-center justify-between bg-slate-900/60 backdrop-blur-md sticky top-0 z-50">
+          <div className="flex items-center space-x-3">
+            <div className="w-10 h-10 bg-gradient-to-tr from-blue-600 to-indigo-500 rounded-xl flex items-center justify-center font-black text-white shadow-lg shadow-blue-500/25 text-lg">
+              SH
+            </div>
+            <div>
+              <div className="flex items-center space-x-2">
+                <span className="font-black text-base tracking-tight text-white">SmartHostel</span>
+                <span className="text-[10px] bg-blue-500/20 text-blue-400 font-bold px-2 py-0.5 rounded-full border border-blue-500/30">
+                  Universal SaaS
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400">Institutional Campus Management Command Platform</p>
+            </div>
+          </div>
+
+          <div className="flex items-center space-x-4">
+            <a
+              href="http://localhost:3001"
+              target="_blank"
+              rel="noreferrer"
+              className="text-xs font-semibold text-slate-300 hover:text-white px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-800/50 hover:bg-slate-800 flex items-center space-x-1.5 transition"
+            >
+              <span>Open Student Resident App</span>
+              <ExternalLink className="w-3.5 h-3.5 text-blue-400" />
+            </a>
+          </div>
+        </header>
+
+        {/* Hero / Portal Body */}
+        <div className="flex-1 flex flex-col items-center justify-center p-6 md:p-12 relative overflow-hidden">
+          <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-[700px] h-[350px] bg-blue-600/10 blur-[130px] rounded-full pointer-events-none" />
+
+          <div className="max-w-4xl w-full z-10 space-y-8">
+            <div className="text-center space-y-3">
+              <div className="inline-flex items-center space-x-2 px-3 py-1 rounded-full bg-blue-500/10 border border-blue-500/20 text-blue-400 text-xs font-semibold">
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Open for Any College, University, or PG Hostel • Real-Time Data Isolation</span>
+              </div>
+              <h1 className="text-3xl md:text-5xl font-black text-white tracking-tight">
+                Institutional Admin Command Center
+              </h1>
+              <p className="text-slate-400 text-sm md:text-base max-w-2xl mx-auto">
+                Sign in to manage your campus residents, emergency alerts, curfew turnstiles, and NAAC dossier, or register your institution in under 60 seconds.
+              </p>
+            </div>
+
+            {/* Auth Card Container */}
+            <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 md:p-8 shadow-2xl backdrop-blur-xl">
+              {/* Tabs */}
+              <div className="flex bg-slate-950 p-1.5 rounded-2xl border border-slate-800/80 mb-6">
+                <button
+                  type="button"
+                  onClick={() => { setAuthTab('LOGIN'); setLoginError(''); setRegError(''); }}
+                  className={`flex-1 py-2.5 rounded-xl font-bold text-xs md:text-sm transition flex items-center justify-center space-x-2 cursor-pointer ${
+                    authTab === 'LOGIN'
+                      ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/25'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <UserCheck className="w-4 h-4" />
+                  <span>Campus Manager Sign In</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setAuthTab('REGISTER'); setLoginError(''); setRegError(''); }}
+                  className={`flex-1 py-2.5 rounded-xl font-bold text-xs md:text-sm transition flex items-center justify-center space-x-2 cursor-pointer ${
+                    authTab === 'REGISTER'
+                      ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/25'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Register New College / Campus</span>
+                </button>
+              </div>
+
+              {/* TAB 1: LOGIN */}
+              {authTab === 'LOGIN' && (
+                <div className="space-y-6">
+                  {loginError && (
+                    <div className="p-3 bg-red-500/10 border border-red-500/30 text-red-400 text-xs rounded-xl flex items-center space-x-2">
+                      <AlertTriangle className="w-4 h-4 shrink-0" />
+                      <span>{loginError}</span>
+                    </div>
+                  )}
+
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      if (!loginEmail) {
+                        setLoginError('Please enter your manager email');
+                        return;
+                      }
+                      handleLogin(loginEmail);
+                    }}
+                    className="space-y-4"
+                  >
+                    <div>
+                      <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                        Institution Manager Work Email
+                      </label>
+                      <input
+                        type="email"
+                        required
+                        placeholder="e.g. warden@yourcollege.edu"
+                        value={loginEmail}
+                        onChange={(e) => setLoginEmail(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                        Security Password
+                      </label>
+                      <input
+                        type="password"
+                        placeholder="••••••••"
+                        value={loginPassword}
+                        onChange={(e) => setLoginPassword(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition"
+                      />
+                    </div>
+
+                    <button
+                      type="submit"
+                      disabled={loginLoading}
+                      className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-blue-600/30 transition flex items-center justify-center space-x-2 text-sm disabled:opacity-50 cursor-pointer"
+                    >
+                      {loginLoading ? (
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <>
+                          <span>Sign In to College Operations</span>
+                          <ChevronRight className="w-4 h-4" />
+                        </>
+                      )}
+                    </button>
+                  </form>
+
+                  {/* Quick 1-Click Institutional Demo Logins */}
+                  <div className="pt-6 border-t border-slate-800">
+                    <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-3 text-center">
+                      Quick 1-Click Institutional Demo Logins
+                    </p>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                      <button
+                        type="button"
+                        onClick={() => handleLogin('warden.boys@campus.edu')}
+                        className="p-3 bg-slate-950 hover:bg-slate-800/80 border border-slate-800 hover:border-blue-500/50 rounded-xl text-left transition group cursor-pointer"
+                      >
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[10px] font-bold text-blue-400 bg-blue-500/10 px-1.5 py-0.5 rounded">
+                            WARDEN
+                          </span>
+                          <span className="text-[10px] text-slate-500 font-mono">APEX</span>
+                        </div>
+                        <p className="text-xs font-bold text-white group-hover:text-blue-300">Warden Roy</p>
+                        <p className="text-[11px] text-slate-400 truncate">warden.boys@campus.edu</p>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleLogin('director@campus.edu')}
+                        className="p-3 bg-slate-950 hover:bg-slate-800/80 border border-slate-800 hover:border-emerald-500/50 rounded-xl text-left transition group cursor-pointer"
+                      >
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[10px] font-bold text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded">
+                            DIRECTOR
+                          </span>
+                          <span className="text-[10px] text-slate-500 font-mono">APEX</span>
+                        </div>
+                        <p className="text-xs font-bold text-white group-hover:text-emerald-300">Dr. S. Sharma</p>
+                        <p className="text-[11px] text-slate-400 truncate">director@campus.edu</p>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleLogin('guard.gate1@campus.edu')}
+                        className="p-3 bg-slate-950 hover:bg-slate-800/80 border border-slate-800 hover:border-purple-500/50 rounded-xl text-left transition group cursor-pointer"
+                      >
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[10px] font-bold text-purple-400 bg-purple-500/10 px-1.5 py-0.5 rounded">
+                            SECURITY
+                          </span>
+                          <span className="text-[10px] text-slate-500 font-mono">APEX</span>
+                        </div>
+                        <p className="text-xs font-bold text-white group-hover:text-purple-300">Guard Vikram</p>
+                        <p className="text-[11px] text-slate-400 truncate">guard.gate1@campus.edu</p>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Directory of active registered colleges */}
+                  {registeredColleges.length > 0 && (
+                    <div className="pt-4 border-t border-slate-800/60">
+                      <p className="text-[11px] font-bold text-slate-400 mb-2">
+                        Registered Institutions Active On Platform:
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        {registeredColleges.map((c) => (
+                          <div
+                            key={c.id}
+                            className="px-2.5 py-1 bg-slate-950 border border-slate-800 rounded-lg text-xs flex items-center space-x-2"
+                          >
+                            <Building className="w-3.5 h-3.5 text-blue-400" />
+                            <span className="font-semibold text-slate-200">{c.name}</span>
+                            <span className="text-[10px] bg-slate-800 text-slate-400 font-mono px-1 rounded">
+                              {c.code}
+                            </span>
+                            <span className="text-[10px] text-blue-400">
+                              {c.enrolledStudentsCount || 0} students
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* TAB 2: REGISTER NEW COLLEGE */}
+              {authTab === 'REGISTER' && (
+                <form onSubmit={handleRegisterCollege} className="space-y-5">
+                  {regError && (
+                    <div className="p-3 bg-red-500/10 border border-red-500/30 text-red-400 text-xs rounded-xl flex items-center space-x-2">
+                      <AlertTriangle className="w-4 h-4 shrink-0" />
+                      <span>{regError}</span>
+                    </div>
+                  )}
+
+                  <div className="space-y-4">
+                    <div className="border-b border-slate-800 pb-2">
+                      <h3 className="text-xs font-bold text-blue-400 uppercase tracking-wider">
+                        1. Institution & Hostel Details
+                      </h3>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-300 mb-1">
+                          College / University Name *
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          placeholder="e.g. Oxford Campus Residence"
+                          value={regCollegeName}
+                          onChange={(e) => setRegCollegeName(e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-300 mb-1">
+                          Unique College Code (Optional)
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="e.g. OXFORD-2026 (Auto-generated if empty)"
+                          value={regCollegeCode}
+                          onChange={(e) => setRegCollegeCode(e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-300 mb-1">
+                          Hostel Type
+                        </label>
+                        <select
+                          value={regHostelType}
+                          onChange={(e) => setRegHostelType(e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-blue-500"
+                        >
+                          <option value="CO_ED">Co-Ed (Boys & Girls)</option>
+                          <option value="BOYS">Boys Hostel Only</option>
+                          <option value="GIRLS">Girls Hostel Only</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-300 mb-1">
+                          Curfew Closing Time
+                        </label>
+                        <input
+                          type="text"
+                          value={regCurfewTime}
+                          onChange={(e) => setRegCurfewTime(e.target.value)}
+                          placeholder="21:30"
+                          className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-300 mb-1">
+                          Campus Location / Address
+                        </label>
+                        <input
+                          type="text"
+                          value={regAddress}
+                          onChange={(e) => setRegAddress(e.target.value)}
+                          placeholder="e.g. North Campus, Main Ave"
+                          className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-300 mb-1">
+                        Hostel Blocks (Comma Separated)
+                      </label>
+                      <input
+                        type="text"
+                        value={regBlocks}
+                        onChange={(e) => setRegBlocks(e.target.value)}
+                        placeholder="e.g. Block A, Block B, Block C"
+                        className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+                      />
+                      <p className="text-[10px] text-slate-500 mt-1">Students will be able to select from these blocks during enrollment.</p>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4 pt-2">
+                    <div className="border-b border-slate-800 pb-2">
+                      <h3 className="text-xs font-bold text-blue-400 uppercase tracking-wider">
+                        2. Chief Campus Manager Account
+                      </h3>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-300 mb-1">
+                          Manager Full Name *
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          placeholder="e.g. Dr. Arthur Pendelton"
+                          value={regManagerName}
+                          onChange={(e) => setRegManagerName(e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-300 mb-1">
+                          Official Work Email *
+                        </label>
+                        <input
+                          type="email"
+                          required
+                          placeholder="e.g. admin@oxfordresidence.edu"
+                          value={regEmail}
+                          onChange={(e) => setRegEmail(e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-300 mb-1">
+                          Password *
+                        </label>
+                        <input
+                          type="password"
+                          required
+                          placeholder="••••••••"
+                          value={regPassword}
+                          onChange={(e) => setRegPassword(e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-300 mb-1">
+                          Phone Number
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="+91 98000 00000"
+                          value={regPhone}
+                          onChange={(e) => setRegPhone(e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-300 mb-1">
+                          Manager Role
+                        </label>
+                        <select
+                          value={regRole}
+                          onChange={(e) => setRegRole(e.target.value as any)}
+                          className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-blue-500"
+                        >
+                          <option value="WARDEN">Chief Warden</option>
+                          <option value="DIRECTOR">Campus Director / Owner</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={regLoading}
+                    className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold py-3.5 rounded-xl shadow-xl shadow-blue-600/30 transition flex items-center justify-center space-x-2 text-sm disabled:opacity-50 mt-4 cursor-pointer"
+                  >
+                    {regLoading ? (
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <>
+                        <Sparkles className="w-4 h-4" />
+                        <span>Register Institution & Launch Ops Center</span>
+                      </>
+                    )}
+                  </button>
+                </form>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-screen bg-slate-900 text-slate-100 overflow-hidden font-sans">
       {/* 1. Left Collapsible / Dark Nav Sidebar */}
@@ -324,15 +908,20 @@ export default function AdminPanel() {
           {/* Brand Header */}
           <div className="flex items-center space-x-3 px-1">
             <div className="w-9 h-9 bg-blue-600 rounded-xl flex items-center justify-center font-black text-white shadow-lg shadow-blue-500/30">
-              SH
+              {currentUser.tenantCode ? currentUser.tenantCode.substring(0, 2).toUpperCase() : 'SH'}
             </div>
-            <div>
-              <h1 className="font-extrabold text-sm tracking-tight text-white leading-none">
-                Apex Hostels
+            <div className="truncate">
+              <h1 className="font-extrabold text-sm tracking-tight text-white leading-none truncate">
+                {currentUser.tenantName || 'Campus Hostels'}
               </h1>
-              <span className="text-[10px] text-blue-400 font-semibold tracking-wider uppercase">
-                Digital Ops Center
-              </span>
+              <div className="flex items-center space-x-1.5 mt-1">
+                <span className="text-[9px] bg-blue-500/20 text-blue-300 font-mono px-1.5 py-0.5 rounded border border-blue-500/30">
+                  {currentUser.tenantCode}
+                </span>
+                <span className="text-[10px] text-blue-400 font-semibold tracking-wider uppercase">
+                  Ops Center
+                </span>
+              </div>
             </div>
           </div>
 
@@ -408,10 +997,19 @@ export default function AdminPanel() {
           </nav>
         </div>
 
-        {/* Footer info */}
-        <div className="p-3 border-t border-slate-800/80 bg-slate-950/60 text-[11px] text-slate-500 flex items-center justify-between">
-          <span>NAAC Rating: <strong>A++ Ready</strong></span>
-          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
+        {/* User Info & Logout Footer */}
+        <div className="p-3 border-t border-slate-800/80 bg-slate-950/60 text-[11px] text-slate-400 flex items-center justify-between">
+          <div className="truncate pr-2">
+            <p className="font-bold text-slate-200 truncate">{currentUser.name}</p>
+            <p className="text-[10px] text-slate-500 truncate">{currentUser.email}</p>
+          </div>
+          <button
+            onClick={handleLogout}
+            title="Sign out / Switch Institution"
+            className="p-1.5 hover:bg-red-500/20 text-slate-400 hover:text-red-400 rounded-lg transition shrink-0 cursor-pointer"
+          >
+            <LogOut className="w-4 h-4" />
+          </button>
         </div>
       </aside>
 
@@ -419,17 +1017,22 @@ export default function AdminPanel() {
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden bg-slate-900">
         {/* Top Operational Bar */}
         <header className="h-14 bg-slate-950 border-b border-slate-800 px-6 flex items-center justify-between shrink-0">
-          <div className="flex items-center space-x-3">
-            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+          <div className="flex items-center space-x-3 truncate">
+            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider shrink-0">
               {activeSection.replace('_', ' ')}
             </span>
             <span className="text-slate-600">•</span>
-            <span className="text-xs text-slate-300 font-semibold">
-              Curfew: <strong className="text-amber-400">21:30 PM</strong> (Strict Gates Closed)
+            <span className="text-xs text-slate-300 font-semibold shrink-0">
+              Curfew: <strong className="text-amber-400">{currentUser.hostel?.curfewTime || '21:30'} PM</strong>
+            </span>
+            <span className="text-slate-600">•</span>
+            <span className="text-xs text-blue-400 font-medium flex items-center truncate">
+              <Building className="w-3.5 h-3.5 mr-1 shrink-0" />
+              <span className="truncate">{currentUser.tenantName}</span>
             </span>
           </div>
 
-          <div className="flex items-center space-x-4">
+          <div className="flex items-center space-x-4 shrink-0">
             <button
               onClick={() => setAudioAlertMuted(!audioAlertMuted)}
               className="text-xs font-medium text-slate-400 hover:text-white flex items-center space-x-1"
@@ -439,8 +1042,8 @@ export default function AdminPanel() {
             </button>
 
             <button
-              onClick={() => authToken && fetchAllAdminData(authToken)}
-              className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg transition"
+              onClick={() => authToken && fetchAllAdminData(authToken, currentUser?.tenantId)}
+              className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg transition cursor-pointer"
               title="Refresh Live Data"
             >
               <RefreshCw className="w-4 h-4" />
@@ -452,6 +1055,15 @@ export default function AdminPanel() {
               </div>
               <span className="text-xs font-bold text-slate-200">{activeRole}</span>
             </div>
+
+            <button
+              onClick={handleLogout}
+              className="text-xs px-2.5 py-1 bg-slate-800 hover:bg-red-500/20 text-slate-300 hover:text-red-400 rounded-lg transition flex items-center space-x-1.5 border border-slate-700 cursor-pointer"
+              title="Switch Campus / Logout"
+            >
+              <LogOut className="w-3.5 h-3.5 text-red-400" />
+              <span>Sign Out</span>
+            </button>
           </div>
         </header>
 
