@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Smart Hostel Management System (SHMS)
 ### Enterprise Digital Transformation Platform for Hostels, PGs & College Campuses
 
@@ -95,3 +96,7 @@ An isolated, testable background service continuously evaluating:
 - **Gate Turnstile Simulator**: Integrated RFID/QR barcode scanner tool verifying visitor and resident passes with live LED feedback.
 - **NAAC / AICTE Accreditation Dossier**: Automated compliance dossier covering Criterion 5.1 (Student Support) & 5.3 (Grievance Redressal).
 - **60-Minute Campus Onboarding Wizard**: 5-step rapid setup for new institutions or branches.
+=======
+# CAMPUSHELPER
+A campus/hostel helper platform connecting students with essential services and support
+>>>>>>> bac13997c054ded6638943e192b40770e410303a
