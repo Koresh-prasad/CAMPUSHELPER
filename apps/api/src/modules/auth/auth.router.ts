@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import { prisma } from '../../prisma';
 import { authMiddleware, createAuditRecord } from '../../middlewares/auth';
 import { UserRole } from '@shms/shared';
+import { broadcastStudentRegistration, broadcastStudentApproval } from '../../socket';
 
 const router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'shms_super_secret_jwt_key_9999';
@@ -273,7 +274,7 @@ router.post('/register-student', async (req: Request, res: Response) => {
     const assignedRoom = roomNumber || '101';
     const genStudentId = studentId || `STU-${Date.now().toString().slice(-5)}`;
 
-    // Create User & Resident Profile
+    // Create User & Resident Profile with status PENDING_APPROVAL
     const user = await prisma.user.create({
       data: {
         tenantId: tenant.id,
@@ -282,6 +283,7 @@ router.post('/register-student', async (req: Request, res: Response) => {
         passwordHash: password || 'dummy_hash',
         phone: phone || '+91 99000 00000',
         role: 'STUDENT',
+        status: 'PENDING_APPROVAL',
         avatarUrl: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=120',
         residentProfile: {
           create: {
@@ -295,6 +297,7 @@ router.post('/register-student', async (req: Request, res: Response) => {
             parentPhone: parentPhone || '+91 98000 11111',
             emergencyContact: parentPhone || '+91 98000 11111',
             kycComplete: true,
+            approvalNote: 'Awaiting Campus Warden / Manager admission approval',
             currentPresence: 'IN_HOSTEL'
           }
         }
@@ -316,23 +319,47 @@ router.post('/register-student', async (req: Request, res: Response) => {
       { expiresIn: '7d' }
     );
 
+    // Live Socket Alert to Admin Portal for instant admission confirmation
+    broadcastStudentRegistration({
+      userId: user.id,
+      studentId: user.residentProfile?.studentId,
+      name: user.name,
+      email: user.email,
+      phone: user.phone,
+      roomNumber: assignedRoom,
+      blockName: assignedBlock,
+      course: course || 'B.Tech / Undergraduate',
+      year: year || '1st Year',
+      bloodGroup: bloodGroup || 'O+',
+      parentName: parentName || 'Parent / Guardian',
+      parentPhone: parentPhone || '+91 98000 11111',
+      emergencyContact: parentPhone || '+91 98000 11111',
+      tenantId: tenant.id,
+      tenantName: tenant.name,
+      tenantCode: tenant.code,
+      status: 'PENDING_APPROVAL',
+      createdAt: user.createdAt
+    });
+
     await createAuditRecord(
       user.id,
       user.role,
       'STUDENT_REGISTERED',
       'USER',
       user.id,
-      { collegeName: tenant.name, studentId: genStudentId, room: assignedRoom }
+      { collegeName: tenant.name, studentId: genStudentId, room: assignedRoom, status: 'PENDING_APPROVAL' }
     );
 
     return res.status(201).json({
       token,
+      status: user.status,
       user: {
         id: user.id,
         name: user.name,
         email: user.email,
         phone: user.phone,
         role: user.role,
+        status: user.status,
         avatarUrl: user.avatarUrl,
         tenantId: tenant.id,
         tenantName: tenant.name,
@@ -345,6 +372,142 @@ router.post('/register-student', async (req: Request, res: Response) => {
     return res.status(500).json({ error: 'Failed to register student. Please try again.' });
   }
 });
+
+// 4a. Fetch Pending Student Admission Requests for a College (for Admin/Warden approval queue)
+router.get('/pending-students', async (req: Request, res: Response) => {
+  try {
+    const { tenantId, collegeCode } = req.query;
+    const whereClause: any = {
+      role: 'STUDENT',
+      status: 'PENDING_APPROVAL'
+    };
+    if (tenantId) whereClause.tenantId = String(tenantId);
+    if (collegeCode) whereClause.tenant = { code: String(collegeCode).toUpperCase() };
+
+    const pending = await prisma.user.findMany({
+      where: whereClause,
+      include: {
+        tenant: true,
+        residentProfile: true
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+
+    const formatted = pending.map((u) => ({
+      id: u.id,
+      name: u.name,
+      email: u.email,
+      phone: u.phone,
+      avatarUrl: u.avatarUrl,
+      status: u.status,
+      createdAt: u.createdAt,
+      tenantId: u.tenantId,
+      tenantName: u.tenant.name,
+      tenantCode: u.tenant.code,
+      studentId: u.residentProfile?.studentId || 'N/A',
+      roomNumber: u.residentProfile?.roomNumber || '101',
+      blockName: u.residentProfile?.blockName || 'Block A',
+      course: u.residentProfile?.course || 'Undergraduate',
+      year: u.residentProfile?.year || '1st Year',
+      bloodGroup: u.residentProfile?.bloodGroup || 'O+',
+      parentName: u.residentProfile?.parentName,
+      parentPhone: u.residentProfile?.parentPhone,
+      emergencyContact: u.residentProfile?.emergencyContact,
+      approvalNote: u.residentProfile?.approvalNote,
+      residentProfile: u.residentProfile
+    }));
+
+
+    return res.json(formatted);
+  } catch (error) {
+    console.error('Fetch pending students error:', error);
+    return res.status(500).json({ error: 'Failed to fetch pending student requests' });
+  }
+});
+
+// 4b. Approve Student Admission (Admin Manager / Warden clicks agree)
+router.post('/approve-student', async (req: Request, res: Response) => {
+  try {
+    const userId = req.body.userId || req.body.studentId;
+    const { approvalNote, notes, roomNumber, block } = req.body;
+    if (!userId) return res.status(400).json({ error: 'userId or studentId is required' });
+
+    const noteToUse = notes || approvalNote || 'Admission approved by Campus Warden';
+    const updateProfileData: any = {
+      approvalNote: noteToUse
+    };
+    if (roomNumber) updateProfileData.roomNumber = roomNumber;
+    if (block) updateProfileData.blockName = block;
+
+    const user = await prisma.user.update({
+      where: { id: userId },
+      data: {
+        status: 'ACTIVE',
+        residentProfile: {
+          update: updateProfileData
+        }
+      },
+      include: { residentProfile: true, tenant: true }
+    });
+
+    // Broadcast real-time unlock event directly to the student resident app
+    broadcastStudentApproval({
+      userId: user.id,
+      studentId: user.id,
+      rollNumber: user.residentProfile?.studentId,
+      name: user.name,
+      email: user.email,
+      status: 'ACTIVE',
+      roomNumber: user.residentProfile?.roomNumber,
+      block: user.residentProfile?.blockName,
+      notes: noteToUse,
+      tenantId: user.tenantId,
+      tenantName: user.tenant.name,
+      tenantCode: user.tenant.code
+    });
+
+    return res.json({
+      success: true,
+      message: `Student ${user.name} admitted successfully into ${user.tenant.name}!`,
+      user
+    });
+  } catch (error) {
+    console.error('Approve student error:', error);
+    return res.status(500).json({ error: 'Failed to approve student admission' });
+  }
+});
+
+// 4c. Reject Student Admission
+router.post('/reject-student', async (req: Request, res: Response) => {
+  try {
+    const userId = req.body.userId || req.body.studentId;
+    const { reason } = req.body;
+    if (!userId) return res.status(400).json({ error: 'userId or studentId is required' });
+
+    const user = await prisma.user.update({
+      where: { id: userId },
+      data: {
+        status: 'REJECTED',
+        residentProfile: {
+          update: {
+            approvalNote: reason || 'Admission request declined by Campus Warden'
+          }
+        }
+      },
+      include: { tenant: true }
+    });
+
+    return res.json({
+      success: true,
+      message: `Admission request for ${user.name} was declined.`,
+      user
+    });
+  } catch (error) {
+    console.error('Reject student error:', error);
+    return res.status(500).json({ error: 'Failed to decline student' });
+  }
+});
+
 
 // 5. Universal Login (Students, Wardens, Directors, Guards)
 router.post('/login', async (req: Request, res: Response) => {
@@ -389,6 +552,7 @@ router.post('/login', async (req: Request, res: Response) => {
         email: user.email,
         phone: user.phone,
         role: user.role,
+        status: (user as any).status || 'ACTIVE',
         avatarUrl: user.avatarUrl,
         tenantId: user.tenantId,
         tenantName: user.tenant.name,
@@ -428,6 +592,7 @@ router.get('/me', authMiddleware, async (req: Request, res: Response) => {
       email: user.email,
       phone: user.phone,
       role: user.role,
+      status: (user as any).status || 'ACTIVE',
       avatarUrl: user.avatarUrl,
       tenantId: user.tenantId,
       tenantName: user.tenant.name,
@@ -440,4 +605,40 @@ router.get('/me', authMiddleware, async (req: Request, res: Response) => {
   }
 });
 
+// Real-time status checker for waiting screen
+router.get('/check-status', async (req: Request, res: Response) => {
+  try {
+    const userId = req.query.userId as string;
+    const email = req.query.email as string;
+    if (!userId && !email) {
+      return res.status(400).json({ error: 'userId or email is required' });
+    }
+
+    const user = await prisma.user.findFirst({
+      where: userId ? { id: userId } : { email },
+      include: {
+        tenant: true,
+        residentProfile: true
+      }
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    return res.json({
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      status: (user as any).status || 'ACTIVE',
+      roomNumber: user.residentProfile?.roomNumber || 'A-201',
+      blockName: user.residentProfile?.blockName || 'Block A',
+      approvalNote: (user.residentProfile as any)?.approvalNote || null
+    });
+  } catch (error) {
+    return res.status(500).json({ error: 'Failed to check admission status' });
+  }
+});
+
 export default router;
+

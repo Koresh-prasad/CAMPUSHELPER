@@ -72,3 +72,36 @@ export function broadcastNotice(data: any) {
   if (!io) return;
   io.emit(SOCKET_EVENTS.NOTICE_PUBLISHED, data);
 }
+
+export function broadcastStudentRegistration(data: any) {
+  if (!io) return;
+  io.emit('student:registration_requested', data);
+}
+
+export function broadcastStudentApproval(data: any) {
+  if (!io) return;
+  io.emit('student:approved', data);
+}
+
+export function broadcastMenuUpdate(data: any) {
+  if (!io) return;
+  io.emit('menu:updated', data);
+}
+
+export function broadcastGalleryUpdate(data: any) {
+  if (!io) return;
+  console.log('[WebSocket] Broadcasting gallery:updated to all client devices');
+  io.emit('gallery:updated', data);
+}
+
+export function broadcastCalendarUpdate(data: any) {
+  if (!io) return;
+  console.log('[WebSocket] Broadcasting calendar:updated to all client devices');
+  io.emit('calendar:updated', data);
+}
+
+export function broadcastManagerProfileUpdate(data: any) {
+  if (!io) return;
+  console.log('[WebSocket] Broadcasting manager:updated to all client devices');
+  io.emit('manager:updated', data);
+}

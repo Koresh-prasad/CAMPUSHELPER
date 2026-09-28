@@ -49,6 +49,8 @@ router.get('/', optionalAuthMiddleware, async (req: Request, res: Response) => {
       assignedStaffId: c.assignedStaffId,
       assignedStaffName: c.assignedStaff?.name || 'Unassigned',
       photoUrl: c.photoUrl,
+      videoUrl: (c as any).videoUrl || null,
+      voiceUrl: (c as any).voiceUrl || null,
       isAnonymous: c.isAnonymous,
       slaHours: c.slaHours,
       slaDueAt: c.slaDueAt.toISOString(),
@@ -70,7 +72,7 @@ router.get('/', optionalAuthMiddleware, async (req: Request, res: Response) => {
 // 2-click complaint submission
 router.post('/', authMiddleware, async (req: Request, res: Response) => {
   try {
-    const { title, description, category, priority, isAnonymous, photoUrl } = req.body;
+    const { title, description, category, priority, isAnonymous, photoUrl, voiceUrl, videoUrl } = req.body;
     const residentId = req.user!.id;
 
     const catKey = (category || 'OTHER') as keyof typeof SLA_HOURS_BY_CATEGORY;
@@ -86,8 +88,11 @@ router.post('/', authMiddleware, async (req: Request, res: Response) => {
       ELECTRICITY: 'ELECTRICAL',
       SECURITY: 'SECURITY',
       HOUSEKEEPING: 'HOUSEKEEPING',
+      CLEANLINESS: 'HOUSEKEEPING',
       WIFI: 'ADMIN',
-      FURNITURE: 'HOUSEKEEPING'
+      MESS_CANTEEN: 'MESS',
+      FURNITURE: 'HOUSEKEEPING',
+      OTHER: 'ADMIN'
     };
     const targetDept = deptMap[category] || 'ADMIN';
     const staff = await prisma.staffProfile.findFirst({
@@ -98,17 +103,28 @@ router.post('/', authMiddleware, async (req: Request, res: Response) => {
       assignedStaff = staff.user;
     }
 
+    // Build rich description incorporating voice / video metadata if attached
+    let finalDescription = description || 'Issue reported by resident';
+    if (voiceUrl) {
+      finalDescription += `\n[🎤 Voice Message Attached]`;
+    }
+    if (videoUrl) {
+      finalDescription += `\n[🎥 Video Proof Attached]`;
+    }
+
     const complaint = await prisma.complaint.create({
       data: {
         ticketNumber,
         title: title || `${category} issue in room`,
-        description: description || 'Issue reported by resident',
+        description: finalDescription,
         category: category || 'OTHER',
         priority: priority || 'MEDIUM',
         status: 'RAISED',
         residentId,
         isAnonymous: Boolean(isAnonymous),
-        photoUrl,
+        photoUrl: photoUrl || null,
+        videoUrl: videoUrl || null,
+        voiceUrl: voiceUrl || null,
         slaHours,
         slaDueAt,
         assignedStaffId: assignedStaff?.id,

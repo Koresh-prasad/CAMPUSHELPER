@@ -21,15 +21,29 @@ import complianceRouter from './modules/compliance/compliance.router';
 import inventoryRouter from './modules/inventory/inventory.router';
 import turnstileRouter from './modules/turnstile/turnstile.router';
 import shopsRouter from './modules/shops/shops.router';
+import uploadRouter from './modules/upload/upload.router';
+import managerProfileRouter from './modules/manager-profile/managerProfile.router';
+import galleryRouter from './modules/gallery/gallery.router';
+import calendarRouter from './modules/calendar/calendar.router';
+import path from 'path';
+import fs from 'fs';
 
 dotenv.config();
 
 const app = express();
 const server = http.createServer(app);
 
+// Static uploads serving
+const uploadsDir = path.join(process.cwd(), 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+app.use('/uploads', express.static(uploadsDir));
+
 // Middleware
 app.use(cors({ origin: '*' }));
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Initialize WebSockets
 initSocketServer(server);
@@ -63,6 +77,10 @@ app.use('/api/compliance', complianceRouter);
 app.use('/api/inventory', inventoryRouter);
 app.use('/api/turnstile', turnstileRouter);
 app.use('/api/shops', shopsRouter);
+app.use('/api/upload', uploadRouter);
+app.use('/api/manager-profile', managerProfileRouter);
+app.use('/api/gallery', galleryRouter);
+app.use('/api/calendar', calendarRouter);
 
 const PORT = process.env.PORT || 4000;
 server.listen(PORT, () => {

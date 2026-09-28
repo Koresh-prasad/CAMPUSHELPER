@@ -75,6 +75,7 @@ model User {
   name          String
   role          String    // DIRECTOR, WARDEN, SECURITY, ACCOUNTS, STUDENT, STAFF
   avatarUrl     String?
+  status        String    @default("ACTIVE") // "ACTIVE", "PENDING_APPROVAL", "REJECTED"
   isActive      Boolean   @default(true)
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
@@ -107,6 +108,7 @@ model ResidentProfile {
   course           String?
   year             String?
   kycComplete      Boolean  @default(false)
+  approvalNote     String?
   currentPresence  String   @default("IN_HOSTEL") // "IN_HOSTEL", "OUT_ON_PASS", "OUT_ON_LEAVE", "OVERDUE"
   lastGateScanAt   DateTime?
 }
@@ -134,6 +136,8 @@ model Complaint {
   assignedStaff      User?    @relation("AssignedComplaints", fields: [assignedStaffId], references: [id])
   isAnonymous        Boolean  @default(false)
   photoUrl           String?
+  videoUrl           String?
+  voiceUrl           String?
   slaHours           Int      @default(24)
   slaDueAt           DateTime
   rating             Int?
